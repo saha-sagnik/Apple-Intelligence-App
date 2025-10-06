@@ -14,26 +14,76 @@ struct FitnessPlanView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 20) {
-                headerSection
-                inputSection
-                generateButton
+            ScrollView {
+                VStack(spacing: 20) {
+                    headerSection
+                    inputSection
+                    generateButton
 
-                if generator.isLoading {
-                    loadingView
-                } else if let plan = generator.plan {
-                    planPreview(plan)
-                } else if let error = generator.error {
-                    errorView(error)
-                } else if let rawResponse = generator.rawResponse {
-                    rawResponseView(rawResponse)
+                    if generator.isStreaming {
+                        // Chapter 4: Show streaming progress
+                        VStack(spacing: 16) {
+                            LoadingView()
+                            if let partial = generator.partialPlan,
+                               let title = partial.title,
+                               let description = partial.description {
+                                VStack(alignment: .leading, spacing: 12) {
+                                    Text(title)
+                                        .font(.title2)
+                                        .fontWeight(.bold)
+                                    Text(description)
+                                        .font(.subheadline)
+                                        .foregroundColor(.secondary)
+                                    if let days = partial.days?.compactMap({ $0 }), !days.isEmpty {
+                                        Text("Loading days: \(days.count)/7")
+                                            .font(.caption)
+                                            .foregroundColor(.blue)
+                                    }
+                                }
+                                .padding()
+                                .background(Color(.systemGray6))
+                                .cornerRadius(12)
+                                .opacity(0.8)
+                            }
+                        }
+                    } else if generator.isLoading {
+                        LoadingView(message: generator.progressMessage)
+                    } else if let plan = generator.plan {
+                        PlanPreviewView(plan: plan)
+                    } else if let error = generator.error {
+                        ErrorView(error: error) {
+                            Task {
+                                await generator.generatePlan(for: userInput)
+                            }
+                        }
+                    } else if let rawResponse = generator.rawResponse {
+                        RawResponseView(response: rawResponse)
+                    }
+
+                    // Add some bottom padding for better scrolling
+                    Spacer(minLength: 50)
                 }
-
-                Spacer()
+                .padding()
             }
-            .padding()
             .navigationBarTitleDisplayMode(.large)
+            .onTapGesture {
+                // Dismiss keyboard when tapping outside
+                hideKeyboard()
+            }
+            .task {
+                // Skip prewarming to save memory - only prewarm when actually generating
+                // await generator.prewarmModelForUser()
+            }
+            .onDisappear {
+                // Clean up memory when view disappears
+                generator.cleanup()
+            }
         }
+    }
+    
+    // Helper function to dismiss keyboard
+    private func hideKeyboard() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
 
     private var headerSection: some View {
@@ -72,6 +122,14 @@ struct FitnessPlanView: View {
                     RoundedRectangle(cornerRadius: 8)
                         .stroke(Color(.systemGray4), lineWidth: 1)
                 )
+                .toolbar {
+                    ToolbarItemGroup(placement: .keyboard) {
+                        Spacer()
+                        Button("Done") {
+                            hideKeyboard()
+                        }
+                    }
+                }
 
             Text("Example: I want to lose belly fat and build arm muscle. I have access to a gym and prefer Indian non-vegetarian meals.")
                 .font(.caption)
@@ -80,112 +138,45 @@ struct FitnessPlanView: View {
     }
 
     private var generateButton: some View {
-        Button(action: {
-            Task {
-                await generator.generatePlan(for: userInput)
-            }
-        }) {
-            HStack {
-                Image(systemName: "wand.and.stars")
-                Text("Generate My Plan")
-            }
-            .font(.headline)
-            .foregroundColor(.white)
-            .frame(maxWidth: .infinity)
-            .padding()
-            .background(userInput.isEmpty ? Color.gray : Color.blue)
-            .cornerRadius(10)
-        }
-        .disabled(userInput.isEmpty || generator.isLoading)
-    }
-
-    private var loadingView: some View {
-        VStack(spacing: 16) {
-            ProgressView()
-                .scaleEffect(1.2)
-            Text("Creating your personalized plan...")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-        }
-        .padding()
-        .background(Color(.systemGray6))
-        .cornerRadius(10)
-    }
-
-    private func planPreview(_ plan: FitnessPlan) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundColor(.green)
-                Text("Plan Generated!")
-                    .font(.headline)
-                    .foregroundColor(.green)
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text(plan.title)
-                    .font(.title3)
-                    .fontWeight(.semibold)
-
-                Text(plan.description)
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-            }
-
-            NavigationLink(destination: FitnessPlanDetailView(plan: plan)) {
+        VStack(spacing: 12) {
+            Button(action: {
+                Task {
+                    await generator.generatePlan(for: userInput)
+                }
+            }) {
                 HStack {
-                    Text("View Full Plan")
-                    Spacer()
-                    Image(systemName: "arrow.right")
+                    Image(systemName: "wand.and.stars")
+                    Text("Generate My Plan")
                 }
                 .font(.headline)
+                .foregroundColor(.white)
+                .frame(maxWidth: .infinity)
+                .padding()
+                .background(userInput.isEmpty ? Color.gray : Color.blue)
+                .cornerRadius(10)
+            }
+            .disabled(userInput.isEmpty || generator.isLoading)
+            
+            Button(action: {
+                Task {
+                    await generator.generateDemoPlan()
+                }
+            }) {
+                HStack {
+                    Image(systemName: "play.circle")
+                    Text("Demo Mode (Instant)")
+                }
+                .font(.subheadline)
                 .foregroundColor(.blue)
+                .frame(maxWidth: .infinity)
                 .padding()
                 .background(Color.blue.opacity(0.1))
-                .cornerRadius(8)
+                .cornerRadius(10)
             }
-        }
-        .padding()
-        .background(Color(.systemGray6))
-        .cornerRadius(10)
-    }
-
-    private func errorView(_ error: Error) -> some View {
-        VStack(spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundColor(.red)
-                .font(.title2)
-
-            Text("Error generating plan")
-                .font(.headline)
-                .foregroundColor(.red)
-
-            Text(error.localizedDescription)
-                .font(.caption)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-        }
-        .padding()
-        .background(Color.red.opacity(0.1))
-        .cornerRadius(10)
-    }
-
-    private func rawResponseView(_ response: String) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Generated Plan:")
-                .font(.headline)
-
-            ScrollView {
-                Text(response)
-                    .font(.subheadline)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .frame(maxHeight: 200)
-            .padding(8)
-            .background(Color(.systemGray6))
-            .cornerRadius(8)
+            .disabled(generator.isLoading)
         }
     }
+
 }
 
 #Preview {
